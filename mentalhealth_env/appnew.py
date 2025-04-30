@@ -82,7 +82,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Training loop
-def train_model(model, train_loader, val_loader, epochs=20):
+def train_model(model, train_loader, val_loader, epochs=10):
     for epoch in range(epochs):
         model.train()
         for X_batch, y_batch in train_loader:
