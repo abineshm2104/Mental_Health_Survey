@@ -13,24 +13,23 @@ train_df = pd.read_csv("mentalhealth_env/data/train.csv")
 test_df = pd.read_csv("mentalhealth_env/data/test.csv")
 sample_submission = pd.read_csv("mentalhealth_env/data/sample_submission.csv")
 
-
 # Preprocessing
 def preprocess_data(df, is_train=True):
     df = df.drop(columns=["id", "Name", "City"], errors='ignore')  # Drop unnecessary columns
-    
-    # Handle missing values
-    for col in df.select_dtypes(include=[np.number]).columns:
-        df[col].fillna(df[col].median(), inplace=True)
-    for col in df.select_dtypes(include=['object']).columns:
-        df[col].fillna(df[col].mode()[0], inplace=True)
-    
+
+    # Handle missing values (optimized)
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    obj_cols = df.select_dtypes(include=['object']).columns
+    df[num_cols] = df[num_cols].fillna(df[num_cols].median())
+    df[obj_cols] = df[obj_cols].fillna(df[obj_cols].mode().iloc[0])
+
     # Encode categorical features
     categorical_cols = df.select_dtypes(include=['object']).columns
     encoders = {}
     for col in categorical_cols:
         encoders[col] = LabelEncoder()
         df[col] = encoders[col].fit_transform(df[col])
-    
+
     if is_train:
         X = df.drop(columns=["Depression"], errors='ignore')
         y = df["Depression"].values
@@ -82,7 +81,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Training loop
-def train_model(model, train_loader, val_loader, epochs=10):
+def train_model(model, train_loader, val_loader, epochs=5):
     for epoch in range(epochs):
         model.train()
         for X_batch, y_batch in train_loader:
@@ -91,7 +90,7 @@ def train_model(model, train_loader, val_loader, epochs=10):
             loss = criterion(outputs, y_batch)
             loss.backward()
             optimizer.step()
-        
+
         # Validation
         model.eval()
         correct, total = 0, 0
@@ -101,7 +100,7 @@ def train_model(model, train_loader, val_loader, epochs=10):
                 _, predicted = torch.max(outputs, 1)
                 total += y_batch.size(0)
                 correct += (predicted == y_batch).sum().item()
-        
+
         accuracy = 100 * correct / total
         print(f"Epoch {epoch+1}: Validation Accuracy = {accuracy:.2f}%")
 
@@ -130,8 +129,15 @@ def run_app():
     for col in train_df.columns:
         if col not in ["id", "Name", "City", "Depression"]:
             if col in encoders:  # If it's a categorical column
-                value = st.selectbox(f"Select {col}", train_df[col].unique())
-                value = encoders[col].transform([value])[0]  # Encode category
+                value = st.selectbox(f"Select {col}", train_df[col].dropna().unique())
+                # Handle NaN and unseen values gracefully
+                if pd.isna(value):
+                    value = train_df[col].mode()[0]
+                try:
+                    value = encoders[col].transform([value])[0]
+                except ValueError:
+                    st.warning(f"Unseen value for {col}. Using default.")
+                    value = encoders[col].transform([train_df[col].mode()[0]])[0]
             else:  # Numerical columns
                 value = st.number_input(f"Enter {col}", value=float(train_df[col].median()))
             user_input.append(value)
@@ -143,7 +149,7 @@ def run_app():
             output = model(input_tensor)
             probs = torch.softmax(output, dim=1)
             _, predicted = torch.max(output, 1)
-            
+
             st.write("Predicted Depression Status:", "Yes" if predicted.item() == 1 else "No")
             st.write(f"Confidence Score: {probs[0][predicted].item():.2f}")
         
