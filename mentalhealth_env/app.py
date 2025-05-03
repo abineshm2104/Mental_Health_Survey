@@ -8,10 +8,10 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 import streamlit as st
 
-# Load datasets
-train_df = pd.read_csv('/workspaces/Mental_Health_Survey/mentalhealth_env/data/train.csv')
-test_df = pd.read_csv('/workspaces/Mental_Health_Survey/mentalhealth_env/data/test.csv')
-sample_submission = pd.read_csv('/workspaces/Mental_Health_Survey/mentalhealth_env/data/sample_submission.csv')
+# Load datasets (adjusted paths for Streamlit Cloud)
+train_df = pd.read_csv("mentalhealth_env/data/train.csv")
+test_df = pd.read_csv("mentalhealth_env/data/test.csv")
+sample_submission = pd.read_csv("mentalhealth_env/data/sample_submission.csv")
 
 # Preprocessing
 def preprocess_data(df, is_train=True):
@@ -68,7 +68,7 @@ class DepressionModel(nn.Module):
         self.fc2 = nn.Linear(64, 32)
         self.fc3 = nn.Linear(32, 2)
         self.relu = nn.ReLU()
-    
+
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
@@ -125,7 +125,7 @@ def run_app():
     st.title("Depression Prediction")
 
     user_input = []
-    
+
     for col in train_df.columns:
         if col not in ["id", "Name", "City", "Depression"]:
             if col in encoders:  # If it's a categorical column
@@ -141,7 +141,7 @@ def run_app():
             else:  # Numerical columns
                 value = st.number_input(f"Enter {col}", value=float(train_df[col].median()))
             user_input.append(value)
-    
+
     if st.button("Predict"):
         try:
             input_array = np.array(user_input, dtype=float).reshape(1, -1)
@@ -152,10 +152,9 @@ def run_app():
 
             st.write("Predicted Depression Status:", "Yes" if predicted.item() == 1 else "No")
             st.write(f"Confidence Score: {probs[0][predicted].item():.2f}")
-        
+
         except Exception as e:
             st.error(f"Error processing input: {e}")
 
 if __name__ == "__main__":
     run_app()
-
