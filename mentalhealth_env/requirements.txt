@@ -2,6 +2,7 @@ streamlit==1.32.2
 pandas==1.5.3
 scikit-learn==1.2.2
 numpy==1.23.5
-torch==2.0.1
-torchvision==0.15.2
-torchaudio==2.0.2
+torch==2.0.1+cpu
+torchvision==0.15.2+cpu
+torchaudio==2.0.2+cpu
+-f https://download.pytorch.org/whl/torch_stable.html
