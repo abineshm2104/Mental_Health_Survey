@@ -9,7 +9,7 @@ import streamlit as st
 # ------------------------- #
 #      Constants & Paths    #
 # ------------------------- #
-MODEL_PATH = "depression_model.pt"
+MODEL_PATH = "mentalhealth_env/depression_model.pt"
 
 # ------------------------- #
 #         Model Class       #
