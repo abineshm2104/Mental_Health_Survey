@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import torch
@@ -8,27 +9,41 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 import streamlit as st
 
-# Load datasets (adjusted paths for Streamlit Cloud)
-train_df = pd.read_csv("mentalhealth_env/data/train.csv")
-test_df = pd.read_csv("mentalhealth_env/data/test.csv")
-sample_submission = pd.read_csv("mentalhealth_env/data/sample_submission.csv")
+# ------------------------- #
+#       Configuration       #
+# ------------------------- #
+MODEL_PATH = "depression_model.pt"
 
-# Preprocessing
-def preprocess_data(df, is_train=True):
-    df = df.drop(columns=["id", "Name", "City"], errors='ignore')  # Drop unnecessary columns
+# ------------------------- #
+#        Data Loader        #
+# ------------------------- #
+@st.cache_resource
+def load_data():
+    train_df = pd.read_csv("mentalhealth_env/data/train.csv")
+    test_df = pd.read_csv("mentalhealth_env/data/test.csv")
+    sample_submission = pd.read_csv("mentalhealth_env/data/sample_submission.csv")
+    return train_df, test_df, sample_submission
 
-    # Handle missing values (optimized)
+# ------------------------- #
+#    Preprocessing Setup    #
+# ------------------------- #
+def preprocess_data(df, encoders=None, is_train=True):
+    df = df.drop(columns=["id", "Name", "City"], errors='ignore')
     num_cols = df.select_dtypes(include=[np.number]).columns
     obj_cols = df.select_dtypes(include=['object']).columns
+
     df[num_cols] = df[num_cols].fillna(df[num_cols].median())
     df[obj_cols] = df[obj_cols].fillna(df[obj_cols].mode().iloc[0])
 
-    # Encode categorical features
-    categorical_cols = df.select_dtypes(include=['object']).columns
-    encoders = {}
-    for col in categorical_cols:
-        encoders[col] = LabelEncoder()
-        df[col] = encoders[col].fit_transform(df[col])
+    if encoders is None:
+        encoders = {}
+        for col in obj_cols:
+            encoders[col] = LabelEncoder()
+            df[col] = encoders[col].fit_transform(df[col])
+    else:
+        for col in obj_cols:
+            if col in encoders:
+                df[col] = encoders[col].transform(df[col])
 
     if is_train:
         X = df.drop(columns=["Depression"], errors='ignore')
@@ -37,30 +52,9 @@ def preprocess_data(df, is_train=True):
     else:
         return df
 
-# Apply preprocessing
-X, y, encoders = preprocess_data(train_df)
-test_X = preprocess_data(test_df, is_train=False)
-
-# Normalize features
-scaler = StandardScaler()
-X = scaler.fit_transform(X)
-test_X = scaler.transform(test_X)
-
-# Train-test split
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Convert to PyTorch tensors
-X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train, dtype=torch.long)
-X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
-y_val_tensor = torch.tensor(y_val, dtype=torch.long)
-test_X_tensor = torch.tensor(test_X, dtype=torch.float32)
-
-# DataLoader
-train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=32, shuffle=True)
-val_loader = DataLoader(TensorDataset(X_val_tensor, y_val_tensor), batch_size=32, shuffle=False)
-
-# Define PyTorch model
+# ------------------------- #
+#         Model Class       #
+# ------------------------- #
 class DepressionModel(nn.Module):
     def __init__(self, input_dim):
         super(DepressionModel, self).__init__()
@@ -75,14 +69,18 @@ class DepressionModel(nn.Module):
         x = self.fc3(x)
         return x
 
-# Model setup
-model = DepressionModel(input_dim=X.shape[1])
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+# ------------------------- #
+#       Train Function      #
+# ------------------------- #
+def train_model(X_train, y_train, X_val, y_val, input_dim):
+    model = DepressionModel(input_dim=input_dim)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# Training loop
-def train_model(model, train_loader, val_loader, epochs=5):
-    for epoch in range(epochs):
+    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=32, shuffle=True)
+    val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=32, shuffle=False)
+
+    for epoch in range(5):
         model.train()
         for X_batch, y_batch in train_loader:
             optimizer.zero_grad()
@@ -91,7 +89,6 @@ def train_model(model, train_loader, val_loader, epochs=5):
             loss.backward()
             optimizer.step()
 
-        # Validation
         model.eval()
         correct, total = 0, 0
         with torch.no_grad():
@@ -101,60 +98,87 @@ def train_model(model, train_loader, val_loader, epochs=5):
                 total += y_batch.size(0)
                 correct += (predicted == y_batch).sum().item()
 
-        accuracy = 100 * correct / total
-        print(f"Epoch {epoch+1}: Validation Accuracy = {accuracy:.2f}%")
+        acc = 100 * correct / total
+        st.write(f"Epoch {epoch+1}: Validation Accuracy = {acc:.2f}%")
 
-# Train the model
-train_model(model, train_loader, val_loader)
+    # Save model
+    torch.save(model.state_dict(), MODEL_PATH)
+    return model
 
-# Generate predictions for test set
-model.eval()
-predictions = []
-with torch.no_grad():
-    outputs = model(test_X_tensor)
-    _, predicted = torch.max(outputs, 1)
-    predictions = predicted.numpy()
-
-# Save submission file
-sample_submission["Depression"] = predictions
-sample_submission.to_csv("submission.csv", index=False)
-print("Submission file saved as submission.csv")
-
-# Streamlit App
+# ------------------------- #
+#     Streamlit App UI      #
+# ------------------------- #
 def run_app():
-    st.title("Depression Prediction")
+    st.title("🧠 Depression Prediction App")
 
-    user_input = []
+    train_df, test_df, sample_submission = load_data()
 
-    for col in train_df.columns:
-        if col not in ["id", "Name", "City", "Depression"]:
-            if col in encoders:  # If it's a categorical column
-                value = st.selectbox(f"Select {col}", train_df[col].dropna().unique())
-                # Handle NaN and unseen values gracefully
-                if pd.isna(value):
-                    value = train_df[col].mode()[0]
+    # Sidebar for actions
+    st.sidebar.header("Actions")
+
+    # Train model button
+    if st.sidebar.button("🔁 Train Model"):
+        with st.spinner("Preprocessing and training..."):
+            X, y, encoders = preprocess_data(train_df)
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+
+            X_train, X_val, y_train, y_val = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+            X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+            y_train_tensor = torch.tensor(y_train, dtype=torch.long)
+            X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
+            y_val_tensor = torch.tensor(y_val, dtype=torch.long)
+
+            model = train_model(X_train_tensor, y_train_tensor, X_val_tensor, y_val_tensor, input_dim=X.shape[1])
+            st.success("✅ Model trained and saved successfully!")
+
+            # Save encoders and scaler (for reuse in prediction)
+            st.session_state["encoders"] = encoders
+            st.session_state["scaler"] = scaler
+
+    # Prediction
+    st.subheader("📋 Enter Patient Details to Predict Depression")
+
+    encoders = st.session_state.get("encoders")
+    scaler = st.session_state.get("scaler")
+
+    if encoders and scaler and os.path.exists(MODEL_PATH):
+        user_input = []
+        for col in train_df.columns:
+            if col in ["id", "Name", "City", "Depression"]:
+                continue
+            if col in encoders:
+                value = st.selectbox(f"{col}", train_df[col].dropna().unique())
                 try:
                     value = encoders[col].transform([value])[0]
-                except ValueError:
-                    st.warning(f"Unseen value for {col}. Using default.")
+                except:
                     value = encoders[col].transform([train_df[col].mode()[0]])[0]
-            else:  # Numerical columns
-                value = st.number_input(f"Enter {col}", value=float(train_df[col].median()))
+            else:
+                value = st.number_input(f"{col}", value=float(train_df[col].median()))
             user_input.append(value)
 
-    if st.button("Predict"):
-        try:
-            input_array = np.array(user_input, dtype=float).reshape(1, -1)
-            input_tensor = torch.tensor(scaler.transform(input_array), dtype=torch.float32)
-            output = model(input_tensor)
-            probs = torch.softmax(output, dim=1)
-            _, predicted = torch.max(output, 1)
+        if st.button("🧮 Predict"):
+            try:
+                input_array = np.array(user_input).reshape(1, -1)
+                input_tensor = torch.tensor(scaler.transform(input_array), dtype=torch.float32)
 
-            st.write("Predicted Depression Status:", "Yes" if predicted.item() == 1 else "No")
-            st.write(f"Confidence Score: {probs[0][predicted].item():.2f}")
+                model = DepressionModel(input_dim=input_tensor.shape[1])
+                model.load_state_dict(torch.load(MODEL_PATH))
+                model.eval()
 
-        except Exception as e:
-            st.error(f"Error processing input: {e}")
+                output = model(input_tensor)
+                probs = torch.softmax(output, dim=1)
+                _, pred = torch.max(output, 1)
 
+                st.write("Prediction:", "Yes" if pred.item() == 1 else "No")
+                st.write(f"Confidence: {probs[0][pred].item():.2f}")
+
+            except Exception as e:
+                st.error(f"Error during prediction: {e}")
+    else:
+        st.info("Please train the model first using the sidebar.")
+
+# Run app
 if __name__ == "__main__":
     run_app()
